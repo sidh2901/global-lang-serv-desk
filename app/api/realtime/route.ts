@@ -9,6 +9,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing OPENAI_API_KEY" }, { status: 500 });
   }
 
+  if (apiKey === "your_openai_api_key_here") {
+    console.error("OPENAI_API_KEY is set to placeholder value");
+    return NextResponse.json(
+      { error: "Please set a valid OPENAI_API_KEY in your .env file" },
+      { status: 500 }
+    );
+  }
+
   try {
     // Get SDP from request body
     const sdp = await req.text();

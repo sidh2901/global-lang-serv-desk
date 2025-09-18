@@ -21,6 +21,14 @@ export async function GET() {
     );
   }
 
+  if (apiKey === "your_openai_api_key_here") {
+    console.error("OPENAI_API_KEY is set to placeholder value");
+    return NextResponse.json(
+      { error: "Please set a valid OPENAI_API_KEY in your .env file" },
+      { status: 500 }
+    );
+  }
+
   const sessionConfig = {
     session: {
       type: "realtime",
