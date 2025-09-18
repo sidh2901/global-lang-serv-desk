@@ -120,7 +120,7 @@ export default function ASJCallCenter() {
     if (typeof window !== 'undefined') {
       audioRef.current = new Audio();
       audioRef.current.autoplay = true;
-      audioRef.current.playsInline = true;
+      (audioRef.current as any).playsInline = true;
     }
   }, []);
 
