@@ -60,7 +60,7 @@ export async function startRealtime({
     const sink = new MediaStream();
     const audio = new Audio();
     audio.autoplay = true;
-    audio.playsInline = true;
+    (audio as any).playsInline = true;
     audio.srcObject = sink;
     pc.ontrack = (e) => {
       e.streams[0].getAudioTracks().forEach((t) => sink.addTrack(t));
