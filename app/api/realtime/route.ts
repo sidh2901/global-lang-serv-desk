@@ -4,7 +4,7 @@ export const runtime = "nodejs";
 
 export async function GET() {
   const key = process.env.OPENAI_API_KEY!;
-  const model = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
+  const model = process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview";
 
   if (!key) {
     return NextResponse.json({ error: "Missing OPENAI_API_KEY" }, { status: 500 });
