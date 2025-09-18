@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  # Frontend Service
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - .:/app
+      - /app/node_modules
+    networks:
+      - lingua-network
+
+  # Backend Service (Router/Orchestrator)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=development
+      - ASR_SERVICE_URL=ws://asr:8001
+      - TRANSLATOR_SERVICE_URL=ws://translator:8002
+      - TTS_SERVICE_URL=ws://tts:8003
+      - SFU_SERVICE_URL=ws://sfu:8004
+    depends_on:
+      - asr
+      - translator
+      - tts
+    networks:
+      - lingua-network
+
+  # ASR Service (Whisper/faster-whisper)
+  asr:
+    build:
+      context: ./services/asr
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - DEVICE=cpu
+      - MODEL_SIZE=base
+      - TRANSLATION_MODE=${TRANSLATION_MODE:-pivot}
+    volumes:
+      - asr-models:/app/models
+    networks:
+      - lingua-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Translation Service (IndicTrans2 + NLLB or SeamlessM4T)
+  translator:
+    build:
+      context: ./services/translator
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8002"
+    environment:
+      - DEVICE=cpu
+      - TRANSLATION_MODE=${TRANSLATION_MODE:-pivot}
+      - CACHE_DIR=/app/cache
+    volumes:
+      - translation-models:/app/models
+      - translation-cache:/app/cache
+    networks:
+      - lingua-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # TTS Service (Coqui XTTS-v2)
+  tts:
+    build:
+      context: ./services/tts
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8003"
+    environment:
+      - DEVICE=cpu
+      - MODEL_PATH=/app/models
+      - AUDIO_OUTPUT_DIR=/app/audio_output
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - tts-models:/app/models
+      - tts-audio:/app/audio_output
+    networks:
+      - lingua-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # WebRTC SFU Service (LiveKit self-hosted)
+  sfu:
+    image: livekit/livekit-server:v1.4.3
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    environment:
+      - LIVEKIT_KEYS=${LIVEKIT_API_KEY:-devkey}:${LIVEKIT_API_SECRET:-secret}
+    volumes:
+      - ./config/livekit.yaml:/etc/livekit.yaml
+    command: --config /etc/livekit.yaml
+    networks:
+      - lingua-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7880"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  lingua-network:
+    driver: bridge
+
+volumes:
+  asr-models:
+  translation-models:
+  translation-cache:
+  tts-models:
+  tts-audio:
