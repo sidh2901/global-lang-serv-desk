@@ -15,7 +15,7 @@ export async function GET() {
       method: "POST",
       headers: {
   Authorization: `Bearer ${key}`,
-  "Content-Type": "application/sdp",
+  "Content-Type": "application/json",
   "OpenAI-Beta": "realtime=v1",     // <-- REQUIRED
 },
 
