@@ -5,11 +5,20 @@ export const runtime = "nodejs";
 export async function GET() {
   const apiKey = process.env.OPENAI_API_KEY;
   const model =
-    process.env.OPENAI_REALTIME_MODEL || "gpt-realtime"; // per docs
+    process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview";
 
   if (!apiKey) {
+    console.error("OPENAI_API_KEY environment variable is not set");
     return NextResponse.json(
-      { error: "Missing OPENAI_API_KEY" },
+      { error: "Missing OPENAI_API_KEY environment variable" },
+      { status: 500 }
+    );
+  }
+
+  if (apiKey === "your_openai_api_key_here") {
+    console.error("OPENAI_API_KEY is set to placeholder value");
+    return NextResponse.json(
+      { error: "Please set a valid OPENAI_API_KEY in your .env file" },
       { status: 500 }
     );
   }
@@ -43,15 +52,24 @@ export async function GET() {
     if (!resp.ok) {
       console.error("Token error:", data);
       return NextResponse.json(
-        { error: data?.error || "Failed to create client secret" },
+        { error: data?.error?.message || data?.error || "Failed to create client secret" },
         { status: 500 }
       );
     }
+    
+    if (!data?.client_secret?.value) {
+      console.error("No client_secret in response:", data);
+      return NextResponse.json(
+        { error: "Invalid response from OpenAI API - no client secret" },
+        { status: 500 }
+      );
+    }
+    
     return NextResponse.json(data);
   } catch (err: any) {
     console.error("Token generation error:", err);
     return NextResponse.json(
-      { error: String(err?.message || err) },
+      { error: `Token generation failed: ${String(err?.message || err)}` },
       { status: 500 }
     );
   }

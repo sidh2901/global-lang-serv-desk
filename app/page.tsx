@@ -262,10 +262,19 @@ export default function ASJCallCenter() {
     try {
       // Get ephemeral token
       const tokenRes = await fetch('/api/token');
+      
+      if (!tokenRes.ok) {
+        const errorData = await tokenRes.json();
+        throw new Error(errorData.error || `Token request failed: ${tokenRes.status}`);
+      }
+      
       const tokenData = await tokenRes.json();
       const EPHEMERAL_KEY = tokenData?.client_secret?.value;
 
-      if (!EPHEMERAL_KEY) throw new Error('No ephemeral key');
+      if (!EPHEMERAL_KEY) {
+        console.error('Token response:', tokenData);
+        throw new Error('No ephemeral key in response. Please check your OPENAI_API_KEY in .env file.');
+      }
 
       // Create peer connection
       const pc = new RTCPeerConnection({
