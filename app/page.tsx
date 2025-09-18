@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Mic, MicOff, Volume2, VolumeX, Download, RefreshCcw, Settings, Languages,
-  ClipboardCopy, Check, AlertTriangle, User, Headphones, Repeat2, Shield
+  Phone, PhoneCall, PhoneOff, Mic, MicOff, Volume2, VolumeX, 
+  Download, Settings, Languages, User, Headphones, Clock,
+  PhoneIncoming, PhoneOutgoing, Pause, Play, UserCheck
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,624 +13,688 @@ import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 
-/** =================== ASJ Branding (Executive theme) =================== */
+/** =================== ASJ Professional Call Center Branding =================== */
 const BRAND = {
   logo: 'ASJ',
-  accentBg: 'bg-indigo-600',
-  textTitle: 'text-neutral-900',
-  textMuted: 'text-neutral-500',
-  outlineBtn: 'bg-white/90 backdrop-blur border border-neutral-200',
-  ring: 'ring-1 ring-neutral-200',
+  name: 'ASJ Call Center',
+  tagline: 'Professional Multilingual Support',
+  accentBg: 'bg-blue-600',
+  accentHover: 'hover:bg-blue-700',
+  textTitle: 'text-slate-900',
+  textMuted: 'text-slate-500',
   surface: 'bg-white',
+  border: 'border-slate-200',
+  ring: 'ring-1 ring-slate-200',
 };
 
-/** === Language directory (extend anytime) === */
+/** === Language Options === */
 const LANGUAGE_OPTIONS = [
-  { code: 'english',    label: 'English'    },
-  { code: 'marathi',    label: 'Marathi'    },
-  { code: 'marwari',    label: 'Marwari (Marwadi)' },
-  { code: 'spanish',    label: 'Spanish'    },
-  { code: 'hindi',      label: 'Hindi'      },
-  { code: 'french',     label: 'French'     },
-  { code: 'german',     label: 'German'     },
-  { code: 'italian',    label: 'Italian'    },
-  { code: 'portuguese', label: 'Portuguese' },
-  { code: 'russian',    label: 'Russian'    },
-  { code: 'arabic',     label: 'Arabic'     },
-  { code: 'bengali',    label: 'Bengali'    },
-  { code: 'chinese',    label: 'Chinese'    },
-  { code: 'japanese',   label: 'Japanese'   },
-  { code: 'korean',     label: 'Korean'     },
-  { code: 'tamil',      label: 'Tamil'      },
-  { code: 'telugu',     label: 'Telugu'     },
-  { code: 'urdu',       label: 'Urdu'       },
-  { code: 'turkish',    label: 'Turkish'    },
-  { code: 'thai',       label: 'Thai'       },
-  { code: 'swahili',    label: 'Swahili'    },
+  { code: 'marathi', label: 'मराठी (Marathi)', flag: '🇮🇳' },
+  { code: 'spanish', label: 'Español (Spanish)', flag: '🇪🇸' },
+  { code: 'english', label: 'English', flag: '🇺🇸' },
+  { code: 'hindi', label: 'हिन्दी (Hindi)', flag: '🇮🇳' },
+  { code: 'french', label: 'Français (French)', flag: '🇫🇷' },
+  { code: 'german', label: 'Deutsch (German)', flag: '🇩🇪' },
 ] as const;
 type Lang = typeof LANGUAGE_OPTIONS[number]['code'];
 
-const VOICES = [
-  'alloy','ash','ballad','coral','echo','fable','nova','onyx','sage','shimmer'
-] as const;
+const VOICES = ['alloy','ash','ballad','coral','echo','fable','nova','onyx','sage','shimmer'] as const;
 type Voice = typeof VOICES[number];
+
+type CallState = 'idle' | 'dialing' | 'ringing' | 'connected' | 'on-hold' | 'ended';
+
+interface CallSession {
+  id: string;
+  startTime: Date;
+  duration: number;
+  callerLanguage: Lang;
+  agentLanguage: Lang;
+}
 
 interface TranscriptEntry {
   id: string;
   timestamp: Date;
   speaker: 'caller' | 'agent';
-  sourceText: string;
+  originalText: string;
   translatedText: string;
-  sourceLanguage: Lang;
+  language: Lang;
   targetLanguage: Lang;
 }
 
-interface ConnectionStatus {
-  websocket: boolean;
-  webrtc: boolean;
-  asr: boolean;
-  translator: boolean;
-  tts: boolean;
-}
-
-const LANG_PILL: Partial<Record<Lang, string>> = {
-  marathi: 'bg-blue-100 text-blue-800',
-  marwari: 'bg-amber-100 text-amber-900',
-  spanish: 'bg-orange-100 text-orange-800',
-  english: 'bg-neutral-100 text-neutral-800',
-  hindi: 'bg-rose-100 text-rose-800',
-  french: 'bg-indigo-100 text-indigo-800',
-  german: 'bg-yellow-100 text-yellow-800',
-  japanese: 'bg-emerald-100 text-emerald-800',
-  chinese: 'bg-cyan-100 text-cyan-800',
-  arabic: 'bg-violet-100 text-violet-800',
-  portuguese: 'bg-green-100 text-green-800',
-  russian: 'bg-red-100 text-red-800',
-  tamil: 'bg-pink-100 text-pink-800',
-  telugu: 'bg-purple-100 text-purple-800',
-};
-
-export default function ASJServiceDesk() {
+export default function ASJCallCenter() {
   const { toast } = useToast();
 
-  // Roles & session
-  const [role, setRole] = useState<'caller' | 'agent'>('caller');
-  const [caseId, setCaseId] = useState<string | null>(null);
-  useEffect(() => { setCaseId(`ASJ-${Math.floor(10000 + Math.random() * 90000)}`); }, []);
+  // Call State Management
+  const [callState, setCallState] = useState<CallState>('idle');
+  const [currentSession, setCurrentSession] = useState<CallSession | null>(null);
+  const [callDuration, setCallDuration] = useState(0);
+  const [isAgent, setIsAgent] = useState(false); // Toggle between caller/agent view
 
-  // Controls
+  // Audio & Controls
   const [isMuted, setIsMuted] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [connected, setConnected] = useState(false);
+  const [isOnHold, setIsOnHold] = useState(false);
+  const [volume, setVolume] = useState(0.8);
 
-  // Settings (persisted)
+  // Language Settings
+  const [callerLanguage, setCallerLanguage] = useState<Lang>('marathi');
+  const [agentLanguage, setAgentLanguage] = useState<Lang>('spanish');
   const [voice, setVoice] = useState<Voice>('coral');
-  const [roleLang, setRoleLang] = useState<{ caller: Lang; agent: Lang }>({
-    caller: 'marathi',
-    agent:  'spanish',
-  });
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('asj-settings');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.voice) setVoice(parsed.voice);
-        if (parsed.roleLang?.caller && parsed.roleLang?.agent) setRoleLang(parsed.roleLang);
-      }
-    } catch {}
-  }, []);
-  useEffect(() => {
-    try { localStorage.setItem('asj-settings', JSON.stringify({ voice, roleLang })); } catch {}
-  }, [voice, roleLang]);
 
-  // Direction by role
-  const direction = {
-    source: roleLang[role],
-    target: role === 'caller' ? roleLang.agent : roleLang.caller,
-  };
-
-  // Live content
+  // Real-time Translation
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
-  const [currentSourceText, setCurrentSourceText] = useState('');
-  const [currentTranslatedText, setCurrentTranslatedText] = useState('');
+  const [currentSpeech, setCurrentSpeech] = useState('');
+  const [currentTranslation, setCurrentTranslation] = useState('');
+  const [isListening, setIsListening] = useState(false);
 
-  // Health
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
-    websocket: false, webrtc: false, asr: false, translator: false, tts: false,
-  });
+  // WebRTC & Audio
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const dcRef = useRef<RTCDataChannel | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ringToneRef = useRef<HTMLAudioElement | null>(null);
 
-  // WebRTC
-  // refs near your other refs
-const pcRef = useRef<RTCPeerConnection | null>(null);
-const dcRef = useRef<RTCDataChannel | null>(null);
+  // Call Timer
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-// NEW: queue + helper
-const pendingMsgsRef = useRef<any[]>([]);
+  // Language helpers
+  const getLangInfo = (code: Lang) => LANGUAGE_OPTIONS.find(l => l.code === code);
+  const currentUserLang = isAgent ? agentLanguage : callerLanguage;
+  const targetLang = isAgent ? callerLanguage : agentLanguage;
 
-function sendJSON(obj: any) {
-  const dc = dcRef.current;
-  if (dc && dc.readyState === "open") {
-    dc.send(JSON.stringify(obj));
-  } else {
-    // Not open yet — queue it
-    pendingMsgsRef.current.push(obj);
-  }
-}
-
-  const outAudioRef = useRef<HTMLAudioElement | null>(null);
-
-  const langLabel = (code: Lang) => LANGUAGE_OPTIONS.find(l => l.code === code)?.label ?? code;
-  const langPill = (code: Lang) => LANG_PILL[code] ?? 'bg-neutral-100 text-neutral-800';
-
-  // rolling buffers to accumulate deltas
-  const liveSourceRef = useRef("");
-  const liveTranslatedRef = useRef("");
-
-  const buildInstruction = (src: string, dst: string) =>
-    `You are a simultaneous interpreter. You will hear ${src}.
-     Transcribe and translate into ${dst}. Speak the translation.
-     Stream only the translated text; no extra words.`;
-
-  // Keep audio element in sync
-  useEffect(() => { if (outAudioRef.current) outAudioRef.current.muted = isMuted; }, [isMuted]);
-
-  /** DataChannel messages (server → client) */
-  function handleRealtimeMessage(ev: MessageEvent) {
-    try {
-      const event = JSON.parse(ev.data);
-
-      // ASR deltas (naming can vary by build)
-      if (event.type === "input_audio_buffer.transcription.delta" || event.type === "transcript.delta") {
-        liveSourceRef.current += event.delta || "";
-        setCurrentSourceText(liveSourceRef.current);
-        setConnectionStatus(s => ({ ...s, asr: true }));
-      }
-
-      // Output text deltas
-      if (event.type === "response.output_text.delta" || event.type === "response.delta") {
-        const delta = event.delta || event.output_text_delta || "";
-        liveTranslatedRef.current += delta;
-        setCurrentTranslatedText(liveTranslatedRef.current);
-        setConnectionStatus(s => ({ ...s, translator: true, tts: true }));
-      }
-
-      // A turn finished -> commit
-      if (event.type === "response.completed" || event.type === "turn.end") {
-        const source = liveSourceRef.current.trim();
-        const translated = liveTranslatedRef.current.trim();
-        if (source || translated) {
-          setTranscript(prev => [
-            ...prev,
-            {
-              id: String(Date.now()),
-              timestamp: new Date(),
-              speaker: role,
-              sourceText: source,
-              translatedText: translated,
-              sourceLanguage: direction.source,
-              targetLanguage: direction.target,
-            },
-          ]);
-        }
-        liveSourceRef.current = "";
-        liveTranslatedRef.current = "";
-        setCurrentSourceText("");
-        setCurrentTranslatedText("");
-      }
-    } catch {
-      // not a JSON event (e.g., stats) — ignore
-    }
-  }
-
-  /** Connect (WebRTC) per docs */
-  async function connect() {
-  if (connected) return;
-  setBusy(true);
-
-  try {
-    // 1) get ephemeral key
-    const token = await fetch("/api/token").then(r => r.json());
-    const EPHEMERAL_KEY: string | undefined =
-      token?.client_secret?.value || token?.value;
-    if (!EPHEMERAL_KEY) throw new Error("No ephemeral key from /api/token");
-
-    // 2) create peer connection (add a STUN server for reliability)
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
-    });
-    pcRef.current = pc;
-
-    // remote audio
-    const audioEl = document.createElement("audio");
-    audioEl.autoplay = true;
-    audioEl.playsInline = true;
-    audioEl.muted = isMuted;
-    pc.ontrack = (e) => (audioEl.srcObject = e.streams[0]);
-
-    // data channel
-    const dc = pc.createDataChannel("oai-events");
-    dcRef.current = dc;
-
-    dc.addEventListener("open", () => {
-      // FLUSH any queued messages
-      for (const m of pendingMsgsRef.current) dc.send(JSON.stringify(m));
-      pendingMsgsRef.current = [];
-
-      setConnected(true);
-      setConnectionStatus(s => ({ ...s, webrtc: true }));
-      toast({ title: "Connected", description: "WebRTC channel open" });
-    });
-
-    dc.addEventListener("message", handleRealtimeMessage);
-    dc.addEventListener("close", () => {
-      setConnected(false);
-      setConnectionStatus(s => ({ ...s, webrtc: false }));
-    });
-    dc.addEventListener("error", (e) => {
-      console.error("DataChannel error:", e);
-    });
-
-    // local mic
-    const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const [track] = ms.getTracks();
-    pc.addTrack(track, ms);
-
-    // 3) SDP offer/answer
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    const baseUrl = "https://api.openai.com/v1/realtime/calls";
-    const model = encodeURIComponent(
-      process.env.NEXT_PUBLIC_REALTIME_MODEL || "gpt-realtime"
-    );
-
-    const sdpResp = await fetch(`${baseUrl}?model=${model}`, {
-      method: "POST",
-      body: offer.sdp,
-      headers: {
-        Authorization: `Bearer ${EPHEMERAL_KEY}`,
-        "Content-Type": "application/sdp",
-        
-      },
-    });
-
-    const answer = { type: "answer" as const, sdp: await sdpResp.text() };
-    await pc.setRemoteDescription(answer);
-
-    // 4) Queue the initial session.update; it will send on 'open'
-    const instr = buildInstruction(
-      langLabel(direction.source),
-      langLabel(direction.target)
-    );
-    sendJSON({
-      type: "session.update",
-      session: { instructions: instr, audio: { output: { voice } } },
-    });
-
-  } catch (e) {
-    console.error(e);
-    toast({ title: "Connect failed", description: "See console for details." });
-    disconnect();
-  } finally {
-    setBusy(false);
-  }
-}
-
-
-  /** Disconnect */
-  function disconnect() {
-    try {
-      dcRef.current?.close();
-      pcRef.current?.getSenders().forEach(s => s.track?.stop());
-      pcRef.current?.close();
-    } catch {}
-    dcRef.current = null;
-    pcRef.current = null;
-    setConnected(false);
-    setConnectionStatus(s => ({ ...s, webrtc: false, asr: false, translator: false, tts: false }));
-    liveSourceRef.current = "";
-    liveTranslatedRef.current = "";
-    setCurrentSourceText("");
-    setCurrentTranslatedText("");
-  }
-
-  // Push live updates when role/lang/voice change
+  // Initialize audio elements
   useEffect(() => {
-  if (!pcRef.current || !dcRef.current) return; // nothing to send to yet
-  const instr = buildInstruction(
-    langLabel(direction.source),
-    langLabel(direction.target)
-  );
-  sendJSON({
-    type: "session.update",
-    session: { instructions: instr, audio: { output: { voice } } },
-  });
-}, [direction.source, direction.target, role, voice]);
-// eslint-disable-line
+    // Create ring tone (using Web Audio API for realistic ring)
+    const createRingTone = () => {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.setValueAtTime(440, audioContext.currentTime); // A4 note
+      gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+      
+      return { audioContext, oscillator, gainNode };
+    };
 
-  /** Utilities */
-  const clearSession = () => {
-    setTranscript([]); setCurrentSourceText(''); setCurrentTranslatedText('');
-    setConnectionStatus(s => ({ ...s, asr: false, translator: false, tts: false }));
-    toast({ title: 'Session cleared', description: 'Transcript and live captions reset.' });
+    if (typeof window !== 'undefined') {
+      audioRef.current = new Audio();
+      audioRef.current.autoplay = true;
+      audioRef.current.playsInline = true;
+    }
+  }, []);
+
+  // Call Timer Effect
+  useEffect(() => {
+    if (callState === 'connected') {
+      timerRef.current = setInterval(() => {
+        setCallDuration(prev => prev + 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      if (callState === 'idle') {
+        setCallDuration(0);
+      }
+    }
+
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, [callState]);
+
+  // Format call duration
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
-  const copyLatest = async () => {
-    const last = transcript[transcript.length - 1];
-    if (!last?.translatedText) return;
-    await navigator.clipboard.writeText(last.translatedText);
-    toast({ title: 'Copied translation', description: 'Latest translated text copied.' });
+
+  // Simulate ring tone
+  const playRingTone = () => {
+    // Create a simple ring tone pattern
+    const ring = () => {
+      const beep = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT');
+      beep.volume = 0.3;
+      beep.play().catch(() => {});
+    };
+
+    if (callState === 'ringing') {
+      ring();
+      setTimeout(() => {
+        if (callState === 'ringing') ring();
+      }, 1000);
+      setTimeout(() => {
+        if (callState === 'ringing') ring();
+      }, 2000);
+      setTimeout(() => {
+        if (callState === 'ringing') playRingTone();
+      }, 4000);
+    }
   };
+
+  // Start Call
+  const startCall = async () => {
+    try {
+      setCallState('dialing');
+      toast({ title: 'Initiating call...', description: 'Connecting to agent' });
+
+      // Simulate dialing delay
+      setTimeout(() => {
+        setCallState('ringing');
+        playRingTone();
+        toast({ title: 'Calling...', description: 'Waiting for agent to answer' });
+      }, 1500);
+
+      // Simulate agent pickup (or auto-pickup for demo)
+      setTimeout(() => {
+        if (!isAgent) {
+          // Agent picks up automatically for demo
+          answerCall();
+        }
+      }, 5000);
+
+    } catch (error) {
+      console.error('Failed to start call:', error);
+      toast({ title: 'Call failed', description: 'Unable to connect. Please try again.' });
+      setCallState('idle');
+    }
+  };
+
+  // Answer Call (Agent)
+  const answerCall = async () => {
+    try {
+      setCallState('connected');
+      setCurrentSession({
+        id: `ASJ-${Date.now()}`,
+        startTime: new Date(),
+        duration: 0,
+        callerLanguage,
+        agentLanguage,
+      });
+
+      // Initialize WebRTC connection
+      await initializeWebRTC();
+      
+      toast({ 
+        title: 'Call connected', 
+        description: `${getLangInfo(callerLanguage)?.label} ↔ ${getLangInfo(agentLanguage)?.label}` 
+      });
+
+    } catch (error) {
+      console.error('Failed to answer call:', error);
+      toast({ title: 'Connection failed', description: 'Unable to establish call. Please try again.' });
+      endCall();
+    }
+  };
+
+  // End Call
+  const endCall = () => {
+    setCallState('ended');
+    
+    // Cleanup WebRTC
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    if (dcRef.current) {
+      dcRef.current.close();
+      dcRef.current = null;
+    }
+
+    setTimeout(() => {
+      setCallState('idle');
+      setCurrentSession(null);
+      setTranscript([]);
+      setCurrentSpeech('');
+      setCurrentTranslation('');
+    }, 2000);
+
+    toast({ title: 'Call ended', description: `Duration: ${formatDuration(callDuration)}` });
+  };
+
+  // Initialize WebRTC for real-time translation
+  const initializeWebRTC = async () => {
+    try {
+      // Get ephemeral token
+      const tokenRes = await fetch('/api/token');
+      const tokenData = await tokenRes.json();
+      const EPHEMERAL_KEY = tokenData?.client_secret?.value;
+
+      if (!EPHEMERAL_KEY) throw new Error('No ephemeral key');
+
+      // Create peer connection
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }],
+      });
+      pcRef.current = pc;
+
+      // Get user media
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const [track] = stream.getTracks();
+      pc.addTrack(track, stream);
+
+      // Handle remote audio
+      pc.ontrack = (e) => {
+        if (audioRef.current) {
+          audioRef.current.srcObject = e.streams[0];
+          audioRef.current.volume = volume;
+          audioRef.current.muted = isMuted;
+        }
+      };
+
+      // Create data channel
+      const dc = pc.createDataChannel('translation');
+      dcRef.current = dc;
+
+      dc.onopen = () => {
+        setIsListening(true);
+        // Send initial session config
+        dc.send(JSON.stringify({
+          type: 'session.update',
+          session: {
+            instructions: `You are a professional interpreter. Translate ${getLangInfo(currentUserLang)?.label} to ${getLangInfo(targetLang)?.label}. Speak the translation clearly.`,
+            voice: voice,
+          }
+        }));
+      };
+
+      dc.onmessage = handleTranslationMessage;
+
+      // SDP exchange
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const sdpRes = await fetch(`https://api.openai.com/v1/realtime?model=gpt-realtime`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${EPHEMERAL_KEY}`,
+          'Content-Type': 'application/sdp',
+          'OpenAI-Beta': 'realtime=v1',
+        },
+        body: offer.sdp,
+      });
+
+      const answerSdp = await sdpRes.text();
+      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+    } catch (error) {
+      console.error('WebRTC initialization failed:', error);
+      throw error;
+    }
+  };
+
+  // Handle translation messages
+  const handleTranslationMessage = (event: MessageEvent) => {
+    try {
+      const message = JSON.parse(event.data);
+      
+      switch (message.type) {
+        case 'input_audio_buffer.transcription.delta':
+          setCurrentSpeech(prev => prev + (message.delta || ''));
+          break;
+          
+        case 'response.output_text.delta':
+          setCurrentTranslation(prev => prev + (message.delta || ''));
+          break;
+          
+        case 'response.completed':
+          if (currentSpeech && currentTranslation) {
+            setTranscript(prev => [...prev, {
+              id: Date.now().toString(),
+              timestamp: new Date(),
+              speaker: isAgent ? 'agent' : 'caller',
+              originalText: currentSpeech,
+              translatedText: currentTranslation,
+              language: currentUserLang,
+              targetLanguage: targetLang,
+            }]);
+            setCurrentSpeech('');
+            setCurrentTranslation('');
+          }
+          break;
+      }
+    } catch (error) {
+      console.error('Translation message error:', error);
+    }
+  };
+
+  // Toggle hold
+  const toggleHold = () => {
+    setIsOnHold(!isOnHold);
+    if (audioRef.current) {
+      audioRef.current.muted = !isOnHold ? true : isMuted;
+    }
+    toast({ 
+      title: isOnHold ? 'Call resumed' : 'Call on hold',
+      description: isOnHold ? 'Audio restored' : 'Audio paused'
+    });
+  };
+
+  // Download transcript
   const downloadTranscript = () => {
-    const text = transcript.map(e =>
-      `[${e.timestamp.toLocaleTimeString()}] ${e.speaker.toUpperCase()} | ${langLabel(e.sourceLanguage)} → ${langLabel(e.targetLanguage)}\n` +
-      `• Source: ${e.sourceText}\n• Translated: ${e.translatedText}\n`
-    ).join('\n');
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob); const a = document.createElement('a');
-    a.href = url; a.download = `${caseId ?? 'ASJ'}-transcript-${new Date().toISOString().split('T')[0]}.txt`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-    toast({ title: 'Transcript downloaded', description: `Saved as ${caseId}-transcript-*.txt` });
-  };
-  const swapLanguages = () => {
-    setRoleLang(prev => ({ caller: prev.agent, agent: prev.caller }));
-    toast({ title: 'Languages swapped', description: 'Caller/Agent languages flipped.' });
+    const content = transcript.map(entry => 
+      `[${entry.timestamp.toLocaleTimeString()}] ${entry.speaker.toUpperCase()}\n` +
+      `Original (${getLangInfo(entry.language)?.label}): ${entry.originalText}\n` +
+      `Translation (${getLangInfo(entry.targetLanguage)?.label}): ${entry.translatedText}\n\n`
+    ).join('');
+
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `call-transcript-${currentSession?.id || 'session'}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="min-h-screen bg-neutral-50">
-      {/* hidden audio element for model speech */}
-      <audio ref={outAudioRef} autoPlay playsInline />
-
-      {/* top bar */}
-      <div className="border-b border-neutral-200 bg-white">
-        <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className={cn('h-8 w-8 rounded-md grid place-items-center font-extrabold text-white', BRAND.accentBg)}>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      {/* Header */}
+      <div className="bg-white border-b border-slate-200 shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className={cn('h-10 w-10 rounded-lg grid place-items-center font-bold text-white text-lg', BRAND.accentBg)}>
               {BRAND.logo}
             </div>
-            <div className="leading-tight">
-              <div className={cn('text-sm font-semibold tracking-tight', BRAND.textTitle)}>ASJ OmniDesk</div>
-              <div className={cn('text-[11px]', BRAND.textMuted)}>Enterprise Multilingual Service Desk</div>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900">{BRAND.name}</h1>
+              <p className="text-sm text-slate-500">{BRAND.tagline}</p>
             </div>
-            <Badge variant="secondary" className="ml-2">BETA</Badge>
           </div>
-          <div className="flex items-center gap-2">
-            <Badge className={connected ? 'bg-emerald-600' : 'bg-neutral-400'}>
-              {connected ? 'Live' : 'Idle'}
+          
+          <div className="flex items-center gap-3">
+            <Badge variant={callState === 'connected' ? 'default' : 'secondary'} className="px-3 py-1">
+              {callState === 'connected' ? (
+                <>
+                  <div className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse" />
+                  Connected • {formatDuration(callDuration)}
+                </>
+              ) : (
+                <>
+                  <div className="w-2 h-2 bg-slate-400 rounded-full mr-2" />
+                  {callState.charAt(0).toUpperCase() + callState.slice(1)}
+                </>
+              )}
             </Badge>
-            <Badge variant="outline">Case: {caseId ?? '—'}</Badge>
-            <Button variant="outline" size="sm" onClick={clearSession} className={BRAND.outlineBtn}>
-              <RefreshCcw className="mr-2 h-4 w-4" /> Reset
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setIsMuted(m => !m)} className={BRAND.outlineBtn}>
-              {isMuted ? <VolumeX className="mr-2 h-4 w-4" /> : <Volume2 className="mr-2 h-4 w-4" />}
-              {isMuted ? 'Muted' : 'Unmuted'}
+            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsAgent(!isAgent)}
+              className="border-slate-300"
+            >
+              {isAgent ? <Headphones className="w-4 h-4 mr-2" /> : <User className="w-4 h-4 mr-2" />}
+              {isAgent ? 'Agent View' : 'Caller View'}
             </Button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* Role & Settings */}
-        <Card className={cn(BRAND.surface, BRAND.ring, 'shadow-sm mb-6')}>
-          <CardContent className="py-4 space-y-4">
-            {/* Role toggle */}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-neutral-900">Active speaker</span>
-                <div className="flex rounded-md border border-neutral-200 bg-white overflow-hidden">
-                  <button
-                    onClick={() => setRole('caller')}
-                    className={cn(
-                      'px-4 py-2 text-sm flex items-center gap-2',
-                      role === 'caller' ? 'bg-neutral-900 text-white' : 'text-neutral-700 hover:bg-neutral-50'
-                    )}
-                    title="Caller speaks"
-                  >
-                    <User className="h-4 w-4" /> Caller
-                  </button>
-                  <button
-                    onClick={() => setRole('agent')}
-                    className={cn(
-                      'px-4 py-2 text-sm flex items-center gap-2 border-l',
-                      role === 'agent' ? 'bg-neutral-900 text-white' : 'text-neutral-700 hover:bg-neutral-50'
-                    )}
-                    title="Agent speaks"
-                  >
-                    <Headphones className="h-4 w-4" /> Agent
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={swapLanguages}
-                  title="Swap Caller/Agent languages (⌘/Ctrl+S)"
-                  className="bg-indigo-600 text-white border-0"
-                >
-                  <Repeat2 className="h-4 w-4 mr-2" /> Swap
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={connected ? disconnect : connect}
-                  disabled={busy}
-                  className={connected ? 'border-neutral-200' : 'bg-indigo-600 text-white border-0'}
-                  title={connected ? 'Disconnect' : 'Connect'}
-                >
-                  {connected ? <MicOff className="mr-2 h-4 w-4" /> : <Mic className="mr-2 h-4 w-4" />}
-                  {connected ? 'Disconnect' : 'Connect'}
-                </Button>
-              </div>
-            </div>
-
-            {/* Role language selects + Voice */}
-            <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-              <LabeledSelect
-                icon={<Languages className="h-4 w-4 text-neutral-500" />}
-                label="Caller speaks"
-                value={roleLang.caller}
-                onChange={(v) => setRoleLang(p => ({ ...p, caller: v as Lang }))}
-              />
-              <LabeledSelect
-                icon={<Languages className="h-4 w-4 text-neutral-500" />}
-                label="Agent speaks"
-                value={roleLang.agent}
-                onChange={(v) => setRoleLang(p => ({ ...p, agent: v as Lang }))}
-              />
-
-              <Separator orientation="vertical" className="hidden lg:block h-6" />
-
-              <LabeledSelect
-                icon={<Settings className="h-4 w-4 text-neutral-500" />}
-                label="Voice"
-                value={voice}
-                onChange={(v) => setVoice(v as Voice)}
-                options={VOICES.map(v => ({ value: v, label: v }))}
-              />
-
-              <Separator orientation="vertical" className="hidden lg:block h-6" />
-
-              <div className="flex items-center gap-2 text-neutral-500">
-                <Shield className="h-4 w-4" />
-                <span className="text-sm">Disclosure: This voice is AI-generated.</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left: Controls & Live */}
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          
+          {/* Left Panel - Call Controls */}
           <div className="lg:col-span-1">
-            <Card className={cn(BRAND.surface, BRAND.ring, 'shadow-sm')}>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-neutral-900 flex items-center justify-between">
-                  <span>Call Controls</span>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary" className={langPill(direction.source)}>
-                      {langLabel(direction.source)}
+            <Card className="bg-white shadow-lg border-slate-200">
+              <CardHeader className="pb-4">
+                <CardTitle className="flex items-center justify-between">
+                  <span>Call Control</span>
+                  {currentSession && (
+                    <Badge variant="outline" className="text-xs">
+                      {currentSession.id}
                     </Badge>
-                    <Badge variant="outline">{role === 'caller' ? 'Caller' : 'Agent'}</Badge>
-                  </div>
+                  )}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-6">
+                
+                {/* Main Call Button */}
                 <div className="text-center">
-                  <div
-                    className={cn(
-                      'relative w-28 h-28 mx-auto grid place-items-center rounded-xl border border-neutral-200',
-                      connected ? 'bg-indigo-600' : 'bg-neutral-50'
+                  <div className="relative">
+                    <div className={cn(
+                      'w-24 h-24 mx-auto rounded-full flex items-center justify-center transition-all duration-300',
+                      callState === 'idle' ? 'bg-green-500 hover:bg-green-600 cursor-pointer' :
+                      callState === 'connected' ? 'bg-red-500 hover:bg-red-600 cursor-pointer' :
+                      callState === 'ringing' ? 'bg-blue-500 animate-pulse' :
+                      'bg-slate-400'
                     )}
-                  >
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={connected ? disconnect : connect}
-                      className="w-20 h-20 rounded-xl"
-                      disabled={busy}
-                      title={busy ? 'Connecting…' : connected ? 'Disconnect' : 'Connect'}
+                    onClick={() => {
+                      if (callState === 'idle') startCall();
+                      else if (callState === 'connected') endCall();
+                      else if (callState === 'ringing' && isAgent) answerCall();
+                    }}
                     >
-                      {connected ? <MicOff className="w-10 h-10 text-white" /> : <Mic className="w-10 h-10 text-neutral-700" />}
-                    </Button>
+                    {callState === 'idle' && <Phone className="w-8 h-8 text-white" />}
+                    {callState === 'dialing' && <PhoneOutgoing className="w-8 h-8 text-white" />}
+                    {callState === 'ringing' && (
+                      isAgent ? <PhoneIncoming className="w-8 h-8 text-white" /> : <PhoneCall className="w-8 h-8 text-white" />
+                    )}
+                    {callState === 'connected' && <PhoneOff className="w-8 h-8 text-white" />}
+                    {callState === 'ended' && <PhoneOff className="w-8 h-8 text-white" />}
                   </div>
-                  <p className={cn('text-xs mt-2', BRAND.textMuted)}>
-                    {busy ? 'Connecting…' : connected ? 'Live (WebRTC)' : 'Click to connect'}
+                  
+                  {callState === 'ringing' && (
+                    <div className="absolute inset-0 rounded-full border-4 border-blue-300 animate-ping" />
+                  )}
+                  </div>
+                  
+                  <p className="mt-4 text-sm font-medium text-slate-700">
+                    {callState === 'idle' && 'Start Call'}
+                    {callState === 'dialing' && 'Connecting...'}
+                    {callState === 'ringing' && (isAgent ? 'Incoming Call - Click to Answer' : 'Ringing...')}
+                    {callState === 'connected' && 'End Call'}
+                    {callState === 'ended' && 'Call Ended'}
                   </p>
                 </div>
 
                 <Separator />
 
-                {/* Actions */}
-                <div className="flex flex-wrap gap-2 justify-between">
-                  <Button variant="outline" size="sm" onClick={downloadTranscript} className={BRAND.outlineBtn}>
-                    <Download className="mr-2 h-4 w-4" />
-                    Download
+                {/* Call Controls */}
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsMuted(!isMuted)}
+                    disabled={callState !== 'connected'}
+                    className={isMuted ? 'bg-red-50 border-red-200' : ''}
+                  >
+                    {isMuted ? <MicOff className="w-4 h-4 mr-2" /> : <Mic className="w-4 h-4 mr-2" />}
+                    {isMuted ? 'Unmute' : 'Mute'}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={copyLatest} disabled={!transcript.length} className={BRAND.outlineBtn}>
-                    <ClipboardCopy className="mr-2 h-4 w-4" />
-                    Copy latest
+                  
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleHold}
+                    disabled={callState !== 'connected'}
+                    className={isOnHold ? 'bg-yellow-50 border-yellow-200' : ''}
+                  >
+                    {isOnHold ? <Play className="w-4 h-4 mr-2" /> : <Pause className="w-4 h-4 mr-2" />}
+                    {isOnHold ? 'Resume' : 'Hold'}
                   </Button>
                 </div>
 
                 <Separator />
 
-                {/* Health */}
-                <div className="grid grid-cols-3 gap-3">
-                  <HealthPill label="ASR" ok={connectionStatus.asr} />
-                  <HealthPill label="Translate" ok={connectionStatus.translator} />
-                  <HealthPill label="TTS" ok={connectionStatus.tts} />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className={cn(BRAND.surface, BRAND.ring, 'shadow-sm mt-6')}>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-neutral-900">Live Caption</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="p-3 bg-white border border-neutral-200 rounded-md min-h-[70px]" aria-live="polite">
-                  <p className="text-xs text-neutral-500 mb-1">
-                    Source ({langLabel(direction.source)})
-                  </p>
-                  <p className="text-sm text-neutral-900">{connected ? (currentSourceText || 'Listening…') : '—'}</p>
-                </div>
-
-                <div className="p-3 mt-3 rounded-md min-h-[70px] border border-neutral-200" aria-live="polite">
-                  <div className="rounded-md -m-3 p-3 border-l-2 border-indigo-500 bg-indigo-50/60">
-                    <p className="text-xs text-indigo-700 mb-1">
-                      Translation ({langLabel(direction.target)})
-                    </p>
-                    <p className="text-sm text-neutral-900">
-                      {connected ? (currentTranslatedText || 'Translating…') : '—'}
-                    </p>
+                {/* Language Settings */}
+                <div className="space-y-4">
+                  <h3 className="font-medium text-slate-900">Language Settings</h3>
+                  
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-sm font-medium text-slate-700 mb-2 block">
+                        Caller Language
+                      </label>
+                      <select
+                        value={callerLanguage}
+                        onChange={(e) => setCallerLanguage(e.target.value as Lang)}
+                        className="w-full p-2 border border-slate-300 rounded-md text-sm"
+                        disabled={callState === 'connected'}
+                      >
+                        {LANGUAGE_OPTIONS.map(lang => (
+                          <option key={lang.code} value={lang.code}>
+                            {lang.flag} {lang.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="text-sm font-medium text-slate-700 mb-2 block">
+                        Agent Language
+                      </label>
+                      <select
+                        value={agentLanguage}
+                        onChange={(e) => setAgentLanguage(e.target.value as Lang)}
+                        className="w-full p-2 border border-slate-300 rounded-md text-sm"
+                        disabled={callState === 'connected'}
+                      >
+                        {LANGUAGE_OPTIONS.map(lang => (
+                          <option key={lang.code} value={lang.code}>
+                            {lang.flag} {lang.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
+                </div>
+
+                {/* Voice Settings */}
+                <div>
+                  <label className="text-sm font-medium text-slate-700 mb-2 block">
+                    Voice
+                  </label>
+                  <select
+                    value={voice}
+                    onChange={(e) => setVoice(e.target.value as Voice)}
+                    className="w-full p-2 border border-slate-300 rounded-md text-sm"
+                  >
+                    {VOICES.map(v => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </select>
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Right: Transcript */}
-          <div className="lg:col-span-2">
-            <Card className={cn(BRAND.surface, BRAND.ring, 'shadow-sm h-full')}>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-neutral-900 flex items-center justify-between">
-                  <span>Conversation</span>
-                  <div className="text-xs text-neutral-500">
-                    {transcript.length ? `${transcript.length} message${transcript.length > 1 ? 's' : ''}` : 'No messages yet'}
+          {/* Right Panel - Live Translation & Transcript */}
+          <div className="lg:col-span-2 space-y-6">
+            
+            {/* Live Translation */}
+            <Card className="bg-white shadow-lg border-slate-200">
+              <CardHeader className="pb-4">
+                <CardTitle className="flex items-center justify-between">
+                  <span>Live Translation</span>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-xs">
+                      {getLangInfo(currentUserLang)?.flag} {getLangInfo(currentUserLang)?.label}
+                    </Badge>
+                    <span className="text-slate-400">→</span>
+                    <Badge variant="outline" className="text-xs">
+                      {getLangInfo(targetLang)?.flag} {getLangInfo(targetLang)?.label}
+                    </Badge>
+                  </div>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                
+                {/* Current Speech */}
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className={cn(
+                      'w-3 h-3 rounded-full',
+                      isListening && callState === 'connected' ? 'bg-green-500 animate-pulse' : 'bg-slate-300'
+                    )} />
+                    <span className="text-sm font-medium text-slate-700">
+                      {isAgent ? 'Agent' : 'Caller'} Speaking ({getLangInfo(currentUserLang)?.label})
+                    </span>
+                  </div>
+                  <p className="text-slate-900 min-h-[24px]">
+                    {currentSpeech || (callState === 'connected' ? 'Listening...' : 'Not connected')}
+                  </p>
+                </div>
+
+                {/* Translation */}
+                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Languages className="w-4 h-4 text-blue-600" />
+                    <span className="text-sm font-medium text-blue-700">
+                      Translation ({getLangInfo(targetLang)?.label})
+                    </span>
+                  </div>
+                  <p className="text-slate-900 min-h-[24px]">
+                    {currentTranslation || (callState === 'connected' ? 'Translating...' : 'Not connected')}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Call Transcript */}
+            <Card className="bg-white shadow-lg border-slate-200">
+              <CardHeader className="pb-4">
+                <CardTitle className="flex items-center justify-between">
+                  <span>Call Transcript</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-slate-500">
+                      {transcript.length} messages
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={downloadTranscript}
+                      disabled={transcript.length === 0}
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Download
+                    </Button>
                   </div>
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4 max-h-[560px] overflow-y-auto pr-1">
-                  {!transcript.length ? (
-                    <div className="flex items-center gap-2 text-neutral-500 text-sm py-8">
-                      <AlertTriangle className="h-4 w-4" />
-                      Connect and speak to populate the transcript.
+                <div className="space-y-4 max-h-96 overflow-y-auto">
+                  {transcript.length === 0 ? (
+                    <div className="text-center py-8 text-slate-500">
+                      <Clock className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p>Call transcript will appear here</p>
                     </div>
                   ) : (
                     transcript.map((entry) => (
-                      <div key={entry.id} className="rounded-md border border-neutral-200 p-3 bg-white">
-                        <div className="flex items-center justify-between">
+                      <div key={entry.id} className="border border-slate-200 rounded-lg p-4">
+                        <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
-                            <Badge variant="secondary" className={langPill(entry.sourceLanguage)}>
+                            <Badge variant={entry.speaker === 'caller' ? 'default' : 'secondary'}>
+                              {entry.speaker === 'caller' ? (
+                                <User className="w-3 h-3 mr-1" />
+                              ) : (
+                                <UserCheck className="w-3 h-3 mr-1" />
+                              )}
                               {entry.speaker.toUpperCase()}
                             </Badge>
-                            <span className="text-xs text-neutral-500">
-                              {langLabel(entry.sourceLanguage)} → {langLabel(entry.targetLanguage)}
+                            <span className="text-xs text-slate-500">
+                              {entry.timestamp.toLocaleTimeString()}
                             </span>
                           </div>
-                          <span className="text-xs text-neutral-500">{entry.timestamp.toLocaleTimeString()}</span>
-                        </div>
-                        <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="p-2 rounded bg-neutral-50 border border-neutral-200">
-                            <p className="text-[11px] text-neutral-500">Source</p>
-                            <p className="text-sm text-neutral-900">{entry.sourceText}</p>
+                          <div className="flex items-center gap-1 text-xs text-slate-500">
+                            {getLangInfo(entry.language)?.flag} → {getLangInfo(entry.targetLanguage)?.flag}
                           </div>
-                          <div className="p-2 rounded bg-white border border-indigo-200">
-                            <p className="text-[11px] text-indigo-700">Translated</p>
-                            <p className="text-sm text-neutral-900">{entry.translatedText}</p>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="p-3 bg-slate-50 rounded border">
+                            <p className="text-xs text-slate-500 mb-1">Original</p>
+                            <p className="text-sm text-slate-900">{entry.originalText}</p>
+                          </div>
+                          <div className="p-3 bg-blue-50 rounded border border-blue-200">
+                            <p className="text-xs text-blue-600 mb-1">Translation</p>
+                            <p className="text-sm text-slate-900">{entry.translatedText}</p>
                           </div>
                         </div>
                       </div>
@@ -640,49 +705,10 @@ function sendJSON(obj: any) {
             </Card>
           </div>
         </div>
-
-        {/* Footer */}
-        <div className={cn('text-[11px] mt-6 text-center', BRAND.textMuted)}>
-          © {new Date().getFullYear()} <span className="font-semibold text-neutral-800">ASJ</span> • OmniDesk — Precision. Clarity. Scale.
-        </div>
       </div>
-    </div>
-  );
-}
 
-/** ---------- Reusable bits ---------- */
-function LabeledSelect({
-  icon, label, value, onChange, options,
-}: {
-  icon: React.ReactNode; label: string; value: string; onChange: (v: string) => void;
-  options?: { value: string; label: string }[];
-}) {
-  const built = options ?? LANGUAGE_OPTIONS.map(l => ({ value: l.code, label: l.label }));
-  return (
-    <div className="flex items-center gap-2">
-      {icon}
-      <span className="text-sm font-medium text-neutral-800">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-9 rounded-md border border-neutral-200 px-3 text-sm bg-white"
-      >
-        {built.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-      </select>
-    </div>
-  );
-}
-
-function HealthPill({ label, ok }: { label: string; ok: boolean }) {
-  return (
-    <div className={cn(
-      'rounded-md px-2 py-1 text-xs font-medium inline-flex items-center gap-2 border',
-      ok ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-         : 'bg-amber-50 text-amber-700 border-amber-200'
-    )}>
-      <span className={cn('h-2.5 w-2.5 rounded-full', ok ? 'bg-emerald-500' : 'bg-amber-500')} />
-      {label}
-      {ok ? <Check className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+      {/* Hidden audio element */}
+      <audio ref={audioRef} />
     </div>
   );
 }
