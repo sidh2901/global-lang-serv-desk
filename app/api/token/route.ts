@@ -1,11 +1,9 @@
-// app/api/token/route.ts
+// app/api/token/route.ts - Ephemeral token approach (alternative)
 import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 
 export async function GET() {
   const apiKey = process.env.OPENAI_API_KEY;
-  const model =
-    process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview";
 
   if (!apiKey) {
     console.error("OPENAI_API_KEY environment variable is not set");
@@ -23,33 +21,44 @@ export async function GET() {
     );
   }
 
+  const sessionConfig = {
+    session: {
+      type: "realtime",
+      model: "gpt-realtime",
+      audio: {
+        output: {
+          voice: "coral",
+        },
+      },
+      modalities: ["audio", "text"],
+      input_audio_transcription: { 
+        model: "whisper-1" 
+      },
+      turn_detection: {
+        type: "server_vad",
+        threshold: 0.5,
+        prefix_padding_ms: 300,
+        silence_duration_ms: 350,
+      },
+      instructions: "You are a professional interpreter. Translate the user's speech and respond in the target language.",
+    },
+  };
+
   try {
-    // This matches the docs: request a client_secret (ephemeral token)
-    const resp = await fetch(
+    const response = await fetch(
       "https://api.openai.com/v1/realtime/client_secrets",
       {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "OpenAI-Beta": "realtime=v1",
         },
-        body: JSON.stringify({
-          session: {
-            type: "realtime",
-            model,
-            // Default voice; can be updated later via data channel session.update
-            audio: { output: { voice: "alloy" } },
-            // Keep the model focused on translation; we’ll overwrite at connect time as well
-            instructions:
-              "You are a simultaneous interpreter. Transcribe incoming speech and speak the translation. No extra words.",
-          },
-        }),
+        body: JSON.stringify(sessionConfig),
       }
     );
 
-    const data = await resp.json();
-    if (!resp.ok) {
+    const data = await response.json();
+    if (!response.ok) {
       console.error("Token error:", data);
       return NextResponse.json(
         { error: data?.error?.message || data?.error || "Failed to create client secret" },

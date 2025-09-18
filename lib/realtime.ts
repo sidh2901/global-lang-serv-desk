@@ -19,7 +19,8 @@ function waitForIceGathering(pc: RTCPeerConnection) {
   });
 }
 
-export async function startRealtime({
+// Unified interface approach (recommended)
+export async function startRealtimeUnified({
   targetLanguage,
   voice,
   onPartial,
@@ -27,47 +28,35 @@ export async function startRealtime({
   onSourceFinal,
   onError,
 }: {
-  targetLanguage: string;                 // e.g., "Spanish"
-  voice: string;                          // e.g., "alloy"
-  onPartial?: (t: string) => void;        // streaming translated text
-  onFinal?: (t: string) => void;          // final translated text
-  onSourceFinal?: (t: string) => void;    // final ASR of what you said
+  targetLanguage: string;
+  voice: string;
+  onPartial?: (t: string) => void;
+  onFinal?: (t: string) => void;
+  onSourceFinal?: (t: string) => void;
   onError?: (e: any) => void;
 }): Promise<RealtimeHandle> {
   try {
-    // Mic (user gesture from clicking Start)
-    const local = await navigator.mediaDevices.getUserMedia({
+    // Get user media
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
 
-    // Ephemeral session
-    const sessionRes = await fetch("/api/realtime/session");
-    if (!sessionRes.ok) throw new Error(`Session route failed: ${await sessionRes.text()}`);
-    const session = await sessionRes.json();
-    if (!session?.client_secret?.value) throw new Error("Missing ephemeral token");
-
-    // PeerConnection
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
-
-    // Send mic track
-    const mic = new MediaStream();
-    local.getAudioTracks().forEach((t) => {
-      mic.addTrack(t);
-      pc.addTrack(t, mic);
+    // Create peer connection
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
     });
 
-    // Remote audio sink (model TTS)
-    const sink = new MediaStream();
-    const audio = new Audio();
-    audio.autoplay = true;
-    (audio as any).playsInline = true;
-    audio.srcObject = sink;
-    pc.ontrack = (e) => {
-      e.streams[0].getAudioTracks().forEach((t) => sink.addTrack(t));
-      audio.play().catch(() => {}); // Start button = user gesture, so ok
-    };
+    // Set up to play remote audio from the model
+    const audioElement = document.createElement("audio");
+    audioElement.autoplay = true;
+    (audioElement as any).playsInline = true;
+    pc.ontrack = (e) => (audioElement.srcObject = e.streams[0]);
 
-    // DataChannel FIRST (so it’s in SDP)
+    // Add local audio track for microphone input
+    const [track] = stream.getTracks();
+    pc.addTrack(track, stream);
+
+    // Set up data channel for sending and receiving events
     const dc = pc.createDataChannel("oai-events");
     let dcOpen = false;
     let buf = "";
@@ -77,8 +66,8 @@ export async function startRealtime({
 
     const setTargetLanguage = (lang: string) => {
       const instr =
-        `Live translator. Input is user speech (auto-detected). ` +
-        `Output ONLY the translation in ${lang}. Speak it and include matching text. No extra words.`;
+        `You are a professional interpreter. Input is user speech (auto-detected). ` +
+        `Output ONLY the translation in ${lang}. Speak it clearly and include matching text. No extra words.`;
       pushSessionUpdate({ instructions: instr });
     };
 
@@ -88,72 +77,70 @@ export async function startRealtime({
       dcOpen = true;
       setVoice(voice);
       setTargetLanguage(targetLanguage);
-
-      // Arm continuous turn-taking ONCE — request audio + text
-      dc.send(JSON.stringify({
-        type: "response.create",
-        response: { conversation: "auto", modalities: ["audio", "text"] },
-      }));
     };
 
-    dc.onmessage = (m) => {
+    dc.addEventListener("message", (e) => {
       let msg: any;
-      try { msg = JSON.parse(m.data); } catch { return; }
+      try { 
+        msg = JSON.parse(e.data); 
+      } catch { 
+        return; 
+      }
 
-      // We ignore output_audio_buffer.* chatter (audio arrives on remote track)
       switch (msg.type) {
-        case "conversation.item.input_audio_transcription.completed": {
+        case "input_audio_buffer.speech_started":
+          buf = ""; // Reset buffer when new speech starts
+          break;
+        case "input_audio_buffer.transcription.completed":
           const src = msg.transcript ?? msg.text ?? "";
           if (src) onSourceFinal?.(src);
           break;
-        }
         case "response.text.delta":
         case "response.output_text.delta":
-        case "response.delta": {
+        case "response.delta":
           buf += msg.delta ?? "";
           onPartial?.(buf);
           break;
-        }
         case "response.output_text.done":
         case "response.completed":
-        case "response.done": {
+        case "response.done":
           if (buf.trim()) onFinal?.(buf);
           buf = "";
-          // No new response.create — conversation:"auto" keeps listening.
           break;
-        }
-        case "error": {
+        case "error":
           onError?.(new Error(msg.error?.message || "Realtime error"));
           break;
-        }
       }
-    };
+    });
 
-    // SDP exchange
-    const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
+    // Start the session using SDP
+    const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await waitForIceGathering(pc);
 
-    const sdpRes = await fetch(`https://api.openai.com/v1/realtime?model=${encodeURIComponent(session.model)}`, {
+    const sdpResponse = await fetch("/api/realtime", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${session.client_secret.value}`,
-        "Content-Type": "application/sdp",
-        Accept: "application/sdp",
-        "OpenAI-Beta": "realtime=v1",
-      },
       body: pc.localDescription?.sdp ?? offer.sdp!,
+      headers: {
+        "Content-Type": "application/sdp",
+      },
     });
-    if (!sdpRes.ok) throw new Error(`SDP exchange failed: ${await sdpRes.text()}`);
 
-    const answerSdp = await sdpRes.text();
-    await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+    if (!sdpResponse.ok) {
+      throw new Error(`SDP exchange failed: ${await sdpResponse.text()}`);
+    }
+
+    const answer = {
+      type: "answer" as RTCSdpType,
+      sdp: await sdpResponse.text(),
+    };
+    await pc.setRemoteDescription(answer);
 
     const hangup = () => {
       try { dc.close(); } catch {}
       pc.getSenders().forEach((s) => s.track?.stop());
       pc.close();
-      local.getTracks().forEach((t) => t.stop());
+      stream.getTracks().forEach((t) => t.stop());
     };
 
     return { pc, dc, hangup, setTargetLanguage, setVoice };
@@ -162,3 +149,151 @@ export async function startRealtime({
     throw e;
   }
 }
+
+// Ephemeral token approach (alternative)
+export async function startRealtimeEphemeral({
+  targetLanguage,
+  voice,
+  onPartial,
+  onFinal,
+  onSourceFinal,
+  onError,
+}: {
+  targetLanguage: string;
+  voice: string;
+  onPartial?: (t: string) => void;
+  onFinal?: (t: string) => void;
+  onSourceFinal?: (t: string) => void;
+  onError?: (e: any) => void;
+}): Promise<RealtimeHandle> {
+  try {
+    // Get a session token for OpenAI Realtime API
+    const tokenResponse = await fetch("/api/token");
+    if (!tokenResponse.ok) {
+      throw new Error(`Token request failed: ${await tokenResponse.text()}`);
+    }
+    
+    const data = await tokenResponse.json();
+    const EPHEMERAL_KEY = data?.client_secret?.value;
+
+    if (!EPHEMERAL_KEY) {
+      throw new Error("No ephemeral key in response");
+    }
+
+    // Get user media
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+
+    // Create peer connection
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
+    });
+
+    // Set up to play remote audio from the model
+    const audioElement = document.createElement("audio");
+    audioElement.autoplay = true;
+    (audioElement as any).playsInline = true;
+    pc.ontrack = (e) => (audioElement.srcObject = e.streams[0]);
+
+    // Add local audio track for microphone input
+    const [track] = stream.getTracks();
+    pc.addTrack(track, stream);
+
+    // Set up data channel for sending and receiving events
+    const dc = pc.createDataChannel("oai-events");
+    let dcOpen = false;
+    let buf = "";
+
+    const pushSessionUpdate = (update: any) =>
+      dcOpen && dc.send(JSON.stringify({ type: "session.update", session: update }));
+
+    const setTargetLanguage = (lang: string) => {
+      const instr =
+        `You are a professional interpreter. Input is user speech (auto-detected). ` +
+        `Output ONLY the translation in ${lang}. Speak it clearly and include matching text. No extra words.`;
+      pushSessionUpdate({ instructions: instr });
+    };
+
+    const setVoice = (v: string) => pushSessionUpdate({ voice: v });
+
+    dc.onopen = () => {
+      dcOpen = true;
+      setVoice(voice);
+      setTargetLanguage(targetLanguage);
+    };
+
+    dc.addEventListener("message", (e) => {
+      let msg: any;
+      try { 
+        msg = JSON.parse(e.data); 
+      } catch { 
+        return; 
+      }
+
+      switch (msg.type) {
+        case "input_audio_buffer.speech_started":
+          buf = ""; // Reset buffer when new speech starts
+          break;
+        case "input_audio_buffer.transcription.completed":
+          const src = msg.transcript ?? msg.text ?? "";
+          if (src) onSourceFinal?.(src);
+          break;
+        case "response.text.delta":
+        case "response.output_text.delta":
+        case "response.delta":
+          buf += msg.delta ?? "";
+          onPartial?.(buf);
+          break;
+        case "response.output_text.done":
+        case "response.completed":
+        case "response.done":
+          if (buf.trim()) onFinal?.(buf);
+          buf = "";
+          break;
+        case "error":
+          onError?.(new Error(msg.error?.message || "Realtime error"));
+          break;
+      }
+    });
+
+    // Start the session using SDP
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIceGathering(pc);
+
+    const sdpResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
+      method: "POST",
+      body: pc.localDescription?.sdp ?? offer.sdp!,
+      headers: {
+        Authorization: `Bearer ${EPHEMERAL_KEY}`,
+        "Content-Type": "application/sdp",
+      },
+    });
+
+    if (!sdpResponse.ok) {
+      throw new Error(`SDP exchange failed: ${await sdpResponse.text()}`);
+    }
+
+    const answer = {
+      type: "answer" as RTCSdpType,
+      sdp: await sdpResponse.text(),
+    };
+    await pc.setRemoteDescription(answer);
+
+    const hangup = () => {
+      try { dc.close(); } catch {}
+      pc.getSenders().forEach((s) => s.track?.stop());
+      pc.close();
+      stream.getTracks().forEach((t) => t.stop());
+    };
+
+    return { pc, dc, hangup, setTargetLanguage, setVoice };
+  } catch (e) {
+    onError?.(e);
+    throw e;
+  }
+}
+
+// Default export uses unified interface (recommended)
+export const startRealtime = startRealtimeUnified;

@@ -1,54 +1,68 @@
-// app/api/realtime/route.ts
-import { NextResponse } from "next/server";
+// app/api/realtime/route.ts - Unified interface approach
+import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 
-export async function GET() {
-  const key = process.env.OPENAI_API_KEY!;
-  const model = process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview";
-
-  if (!key) {
+export async function POST(req: NextRequest) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  
+  if (!apiKey) {
     return NextResponse.json({ error: "Missing OPENAI_API_KEY" }, { status: 500 });
   }
 
   try {
-    const r = await fetch("https://api.openai.com/v1/realtime/sessions", {
-      method: "POST",
-      headers: {
-  Authorization: `Bearer ${key}`,
-  "Content-Type": "application/json",
-  "OpenAI-Beta": "realtime=v1",     // <-- REQUIRED
-},
-
-      body: JSON.stringify({
-        model,
+    // Get SDP from request body
+    const sdp = await req.text();
+    
+    const sessionConfig = JSON.stringify({
+      session: {
+        type: "realtime",
+        model: "gpt-realtime",
+        audio: {
+          output: {
+            voice: "coral",
+          },
+        },
         modalities: ["audio", "text"],
-        voice: "alloy",
-        output_audio_format: "pcm16",
-        input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
+        input_audio_transcription: { 
+          model: "whisper-1" 
+        },
         turn_detection: {
           type: "server_vad",
           threshold: 0.5,
           prefix_padding_ms: 300,
           silence_duration_ms: 350,
         },
-        // We’ll overwrite instructions from the client as users switch languages/roles.
-        instructions: "Translate only. No extra words.",
-      }),
+        instructions: "You are a professional interpreter. Translate the user's speech and respond in the target language.",
+      },
     });
 
-    const text = await r.text();
-    if (!r.ok) {
-      console.error("Realtime session error:", text);
-      return NextResponse.json({ error: text || "Failed to create session" }, { status: 500 });
+    // Create FormData for multipart request
+    const formData = new FormData();
+    formData.set("sdp", sdp);
+    formData.set("session", sessionConfig);
+
+    const response = await fetch("https://api.openai.com/v1/realtime/calls", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Realtime session error:", errorText);
+      return NextResponse.json({ error: errorText }, { status: response.status });
     }
 
-    // Return the session JSON as-is (contains client_secret.value & model)
-    return new NextResponse(text, {
+    // Return the SDP response
+    const answerSdp = await response.text();
+    return new NextResponse(answerSdp, {
       status: 200,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/sdp" },
     });
   } catch (e: any) {
-    console.error("Realtime session throw:", e);
+    console.error("Realtime session error:", e);
     return NextResponse.json({ error: String(e?.message || e) }, { status: 500 });
   }
 }

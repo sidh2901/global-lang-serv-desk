@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
+import { startRealtime, RealtimeHandle } from '@/lib/realtime';
 
 /** =================== ASJ Professional Call Center Branding =================== */
 const BRAND = {
@@ -91,6 +92,7 @@ export default function ASJCallCenter() {
   const dcRef = useRef<RTCDataChannel | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ringToneRef = useRef<HTMLAudioElement | null>(null);
+  const realtimeRef = useRef<RealtimeHandle | null>(null);
 
   // Call Timer
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -236,15 +238,15 @@ export default function ASJCallCenter() {
   const endCall = () => {
     setCallState('ended');
     
-    // Cleanup WebRTC
-    if (pcRef.current) {
-      pcRef.current.close();
-      pcRef.current = null;
+    // Cleanup realtime connection
+    if (realtimeRef.current) {
+      realtimeRef.current.hangup();
+      realtimeRef.current = null;
     }
-    if (dcRef.current) {
-      dcRef.current.close();
-      dcRef.current = null;
-    }
+    
+    pcRef.current = null;
+    dcRef.current = null;
+    setIsListening(false);
 
     setTimeout(() => {
       setCallState('idle');
@@ -260,115 +262,50 @@ export default function ASJCallCenter() {
   // Initialize WebRTC for real-time translation
   const initializeWebRTC = async () => {
     try {
-      // Get ephemeral token
-      const tokenRes = await fetch('/api/token');
-      
-      if (!tokenRes.ok) {
-        const errorData = await tokenRes.json();
-        throw new Error(errorData.error || `Token request failed: ${tokenRes.status}`);
-      }
-      
-      const tokenData = await tokenRes.json();
-      const EPHEMERAL_KEY = tokenData?.client_secret?.value;
-
-      if (!EPHEMERAL_KEY) {
-        console.error('Token response:', tokenData);
-        throw new Error('No ephemeral key in response. Please check your OPENAI_API_KEY in .env file.');
-      }
-
-      // Create peer connection
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }],
-      });
-      pcRef.current = pc;
-
-      // Get user media
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const [track] = stream.getTracks();
-      pc.addTrack(track, stream);
-
-      // Handle remote audio
-      pc.ontrack = (e) => {
-        if (audioRef.current) {
-          audioRef.current.srcObject = e.streams[0];
-          audioRef.current.volume = volume;
-          audioRef.current.muted = isMuted;
-        }
-      };
-
-      // Create data channel
-      const dc = pc.createDataChannel('translation');
-      dcRef.current = dc;
-
-      dc.onopen = () => {
-        setIsListening(true);
-        // Send initial session config
-        dc.send(JSON.stringify({
-          type: 'session.update',
-          session: {
-            instructions: `You are a professional interpreter. Translate ${getLangInfo(currentUserLang)?.label} to ${getLangInfo(targetLang)?.label}. Speak the translation clearly.`,
-            voice: voice,
-          }
-        }));
-      };
-
-      dc.onmessage = handleTranslationMessage;
-
-      // SDP exchange
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      const sdpRes = await fetch(`https://api.openai.com/v1/realtime?model=gpt-realtime`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${EPHEMERAL_KEY}`,
-          'Content-Type': 'application/sdp',
-          'OpenAI-Beta': 'realtime=v1',
+      // Use the official WebRTC implementation
+      const handle = await startRealtime({
+        targetLanguage: getLangInfo(targetLang)?.label || 'Spanish',
+        voice: voice,
+        onPartial: (text) => {
+          setCurrentTranslation(text);
         },
-        body: offer.sdp,
-      });
-
-      const answerSdp = await sdpRes.text();
-      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-
-    } catch (error) {
-      console.error('WebRTC initialization failed:', error);
-      throw error;
-    }
-  };
-
-  // Handle translation messages
-  const handleTranslationMessage = (event: MessageEvent) => {
-    try {
-      const message = JSON.parse(event.data);
-      
-      switch (message.type) {
-        case 'input_audio_buffer.transcription.delta':
-          setCurrentSpeech(prev => prev + (message.delta || ''));
-          break;
-          
-        case 'response.output_text.delta':
-          setCurrentTranslation(prev => prev + (message.delta || ''));
-          break;
-          
-        case 'response.completed':
-          if (currentSpeech && currentTranslation) {
+        onFinal: (text) => {
+          setCurrentTranslation(text);
+          // Add to transcript
+          if (currentSpeech && text) {
             setTranscript(prev => [...prev, {
               id: Date.now().toString(),
               timestamp: new Date(),
               speaker: isAgent ? 'agent' : 'caller',
               originalText: currentSpeech,
-              translatedText: currentTranslation,
+              translatedText: text,
               language: currentUserLang,
               targetLanguage: targetLang,
             }]);
             setCurrentSpeech('');
             setCurrentTranslation('');
           }
-          break;
-      }
+        },
+        onSourceFinal: (text) => {
+          setCurrentSpeech(text);
+        },
+        onError: (error) => {
+          console.error('Realtime error:', error);
+          toast({ 
+            title: 'Translation error', 
+            description: 'Connection to translation service failed' 
+          });
+        }
+      });
+
+      realtimeRef.current = handle;
+      pcRef.current = handle.pc;
+      dcRef.current = handle.dc;
+      setIsListening(true);
+
     } catch (error) {
-      console.error('Translation message error:', error);
+      console.error('WebRTC initialization failed:', error);
+      throw error;
     }
   };
 
