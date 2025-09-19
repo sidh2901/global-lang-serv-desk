@@ -17,6 +17,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (apiKey === "your_actual_openai_api_key_here") {
+    console.error("OPENAI_API_KEY is still set to placeholder value");
+    return NextResponse.json(
+      { error: "Please replace the placeholder OPENAI_API_KEY with your actual OpenAI API key" },
+      { status: 500 }
+    );
+  }
+
   try {
     // Get SDP from request body
     const sdp = await req.text();

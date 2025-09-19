@@ -29,6 +29,14 @@ export async function GET() {
     );
   }
 
+  if (apiKey === "your_actual_openai_api_key_here") {
+    console.error("OPENAI_API_KEY is still set to placeholder value");
+    return NextResponse.json(
+      { error: "Please replace the placeholder OPENAI_API_KEY with your actual OpenAI API key" },
+      { status: 500 }
+    );
+  }
+
   const sessionConfig = {
     session: {
       type: "realtime",
