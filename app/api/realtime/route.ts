@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     const sessionConfig = JSON.stringify({
       session: {
         type: "realtime",
-        model: "gpt-realtime",
+        model: "gpt-4o-mini",
         audio: {
           output: {
             voice: "coral",

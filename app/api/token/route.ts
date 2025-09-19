@@ -32,7 +32,7 @@ export async function GET() {
   const sessionConfig = {
     session: {
       type: "realtime",
-      model: "gpt-realtime",
+      model: "gpt-4o-mini",
       audio: {
         output: {
           voice: "coral",
